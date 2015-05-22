@@ -23,6 +23,8 @@ install.packages("gbm")
 library(gbm)
 install.packages("ROCR")
 library(ROCR)
+install.packages("Hmisc")
+library(Hmisc)
 
 
 # extract bidder information; transform training data to be bidder per row
@@ -563,9 +565,8 @@ rfGrid <-  expand.grid(mtry = c(2:40))
 rf.model.full <- train(as.factor(outcome) ~ . - bidder_id - payment_account - address, 
                        bidder.train.ext.4, method = 'rf', metric = 'ROC',
                        tuneGrid = rfGrid,
-                       trControl = trainControl(method = 'repeatedcv', 
+                       trControl = trainControl(method = 'cv', 
                                                 number = 10,
-                                                repeats = 10,
                                                 classProbs = T,
                                                 summaryFunction = twoClassSummary))
 
@@ -579,37 +580,10 @@ gbm.model.full <- train(as.factor(outcome) ~ . - bidder_id - payment_account - a
                         bidder.train.ext.4, method = 'gbm', metric = 'ROC',
                         verbose=T, 
                         tuneGrid = gbmGrid,
-                        trControl = trainControl(method = 'repeatedcv', 
+                        trControl = trainControl(method = 'cv', 
                                                  number = 10,
-                                                 repeats = 10,
                                                  classProbs = T,
                                                  summaryFunction = twoClassSummary))
-
-
-# submit the tuned
-gbmGrid <- expand.grid(interaction.depth = 5,
-                       n.trees = 550,
-                       shrinkage = 0.1,
-                       n.minobsinnode = 10)
-
-gbm.model.full <- train(as.factor(outcome) ~ . - bidder_id - payment_account - address, 
-                        bidder.train.ext.4, method = 'gbm', metric = 'ROC',
-                        verbose=F, trControl = trainControl(method = 'cv', 
-                                                            number = 10,
-                                                            
-                                                            classProbs = T,
-                                                            summaryFunction = twoClassSummary),
-                        tuneGrid = gbmGrid)
-
-
-
-ggplot(rf.model.full)
-ggplot(gbm.model.full)
-
-resamps <- resamples(list(GBM = gbm.model.full,
-                          RF = rf.model.full))
-resamps
-
 
 # select only the most important features from both models
 rf.import <- varImp(rf.model.full)$importance
@@ -631,28 +605,31 @@ names(gbm.import) <- c("gbm.overall", "feature")
 merged.import <- merge(rf.import[1:25,], gbm.import[1:25, ])
 merged.import <- merged.import[order(-merged.import$rf.overall), ]
 
+# save file so running rf and gbm model to get varImp is not needed every time
+# save(merged.import, file = "merged.import.RData")
+load("merged.import.RData")
+
 # fit the models again, with only selected features
 rfGrid <-  expand.grid(mtry = c(2:20))
 rf.model.full.2 <- train(x = bidder.train.ext.4[, names(bidder.train.ext.4) %in% merged.import$feature], 
                          y =  as.factor(bidder.train.ext.4$outcome),
                          method = 'rf', metric = 'ROC',
                          tuneGrid = rfGrid,
-                         trControl = trainControl(method = 'repeatedcv', 
+                         trControl = trainControl(method = 'cv', 
                                                 number = 10,
-                                                repeats = 10,
                                                 classProbs = T,
                                                 summaryFunction = twoClassSummary))
-rfGrid <-  expand.grid(mtry = c(2:20))
-features <- rownames(varImp(rf.model.full)$importance)[1:20]
-rf.model.full.3 <- train(x = bidder.train.ext.4[, names(bidder.train.ext.4) %in% features], 
-                         y =  as.factor(bidder.train.ext.4$outcome),
-                         method = 'rf', metric = 'ROC',
-                         tuneGrid = rfGrid,
-                         trControl = trainControl(method = 'repeatedcv', 
-                                                  number = 10,
-                                                  repeats = 10,
-                                                  classProbs = T,
-                                                  summaryFunction = twoClassSummary))
+
+# select only the top 20 features from the RF model
+# rfGrid <-  expand.grid(mtry = c(2:20))
+# features <- rownames(varImp(rf.model.full)$importance)[1:20]
+# rf.model.full.3 <- train(x = bidder.train.ext.4[, names(bidder.train.ext.4) %in% features], 
+#                          y =  as.factor(bidder.train.ext.4$outcome),
+#                          method = 'rf', metric = 'ROC',
+#                          tuneGrid = rfGrid,
+#                          trControl = trainControl(method = 'cv',
+#                                                   classProbs = T,
+#                                                   summaryFunction = twoClassSummary))
 
 
 gbmGrid <- expand.grid(interaction.depth = c(1, 5, 9),
@@ -660,21 +637,62 @@ gbmGrid <- expand.grid(interaction.depth = c(1, 5, 9),
                        shrinkage = 0.1,
                        n.minobsinnode = 10)
 
-
 gbm.model.full.2 <- train(x = bidder.train.ext.4[, names(bidder.train.ext.4) %in% merged.import$feature], 
                           y =  as.factor(bidder.train.ext.4$outcome),
                         method = 'gbm', metric = 'ROC',
                         verbose=T,
                         tuneGrid = gbmGrid,
-                        trControl = trainControl(method = 'repeatedcv', 
+                        trControl = trainControl(method = 'cv', 
                                                  number = 10,
-                                                 repeats = 10,
                                                  classProbs = T,
                                                  summaryFunction = twoClassSummary))
 
+# 
+# 
+# 
+# 
+# 
+# 
+# # throw out some human observations if they are outliers
+# # keep only human observations with bids.mean within 3 quantiles
+# bidder.train.human <- subset(bidder.train.ext.4, outcome == "X0")
+# quantile <- cut2(bidder.train.human$bids.mean, g = 4)
+# bidder.train.human$cut <- quantile
+# bidder.train.human.1 <- subset(bidder.train.human, cut %in% levels(quantile)[2:3])
+# bidder.train.bot <- subset(bidder.train.ext.4, outcome == "X1")
+# bidder.train.ext.5 <- rbind(bidder.train.human.1[, !names(bidder.train.human.1) %in% 'cut'], 
+#                             bidder.train.bot)
+# 
+# 
+# # fit a rf model for the new training set
+# rfGrid <-  expand.grid(mtry = c(2:20))
+# rf.model.full.2 <- train(x = bidder.train.ext.5[, names(bidder.train.ext.5) %in% merged.import$feature], 
+#                          y =  as.factor(bidder.train.ext.5$outcome),
+#                          method = 'rf', metric = 'ROC',
+#                          tuneGrid = rfGrid,
+#                          trControl = trainControl(method = 'repeatedcv', 
+#                                                   number = 10,
+#                                                   repeats = 10,
+#                                                   classProbs = T,
+#                                                   summaryFunction = twoClassSummary))
+# 
+# gbmGrid <- expand.grid(interaction.depth = c(1, 5, 9),
+#                        n.trees = (1:30)*50,
+#                        shrinkage = 0.1,
+#                        n.minobsinnode = 10)
+# gbm.model.full.3 <- train(x = bidder.train.ext.5[, names(bidder.train.ext.5) %in% merged.import$feature], 
+#                           y =  as.factor(bidder.train.ext.5$outcome),
+#                           method = 'gbm', metric = 'ROC',
+#                           verbose=T,
+#                           tuneGrid = gbmGrid,
+#                           trControl = trainControl(method = 'repeatedcv', 
+#                                                    number = 10,
+#                                                    repeats = 10,
+#                                                    classProbs = T,
+#                                                    summaryFunction = twoClassSummary))
 
 # create 10-cross validation with the final models
-CrossValidation <- function(model) {
+CrossValidation <- function(model, df) {
   # this function inputs a model, checks AUC with a repeated 10-fold validation
   # and returns the AUC value for all repeated 10 folds
   #
@@ -683,8 +701,8 @@ CrossValidation <- function(model) {
   #     
   # returns: 
   #   a list with AUC value for each fold 
-  features <- c(model$coefnames, "outcome")
-  folds <- createFolds(y = bidder.train.ext.4$outcome, k = 10, list = T, returnTrain = F)
+  features <- c(model$finalModel$xNames, "outcome")
+  folds <- createFolds(y = df$outcome, k = 10, list = T, returnTrain = F)
   
   # get model method
   method <- model$method
@@ -707,8 +725,8 @@ CrossValidation <- function(model) {
     for (i in 1:length(folds)) {
       
       inTest <- folds[[i]]
-      intest.fold <- bidder.train.ext.4[inTest, ]
-      intrain.fold <- bidder.train.ext.4[-inTest, ]
+      intest.fold <- df[inTest, ]
+      intrain.fold <- df[-inTest, ]
       # replace X0 and X1 with 0 and 1
       #   bidder.train[bidder.train$outcome == 1, "outcome"] <- "X1"
       #   bidder.train[bidder.train$outcome == 0, "outcome"] <- "X0"
@@ -818,30 +836,22 @@ CrossValidationSmallTree <- function(model) {
 }
 
 auc.rf.model.1 <- CrossValidation(rf.model.full)
-auc.rf.model.2 <- CrossValidationSmallTree(rf.model.full.2)
 auc.rf.model.3 <- CrossValidationSmallTree(rf.model.full.3)
 # modified features in CrossValidationSmallTree function, change it back
 auc.rf.model.4 <- CrossValidationSmallTree(rf.model.full.3)
+# use throw-out set
+auc.rf.model.2 <- CrossValidationSmallTree(rf.model.full.2)
+auc.gbm.model.3 <- CrossValidationSmallTree(gbm.model.full.3)
+
+
+
 
 
 auc.gbm.model.1 <- CrossValidation(gbm.model.full)
 auc.gbm.model.2 <- CrossValidationSmallTree(gbm.model.full.2)
 
 
-# apply the best performing model to the testing set
 
-pred.test <- predict(rf.model.full.3, bidder.test.ext.4[, names(bidder.test.ext.4) %in% merged.import$feature],
-                     type = "prob")
-
-submit <- data.frame(bidder_id = bidder.test.ext.4$bidder_id, prediction = pred.test$X1)
-
-# merge the original test data bidder_id and submit
-
-submit.full <- merge(submit, test, all=T)
-submit.full[is.na(submit.full$prediction), "prediction"] <- 0
-submit.full <- submit.full[, 1:2]
-
-write.csv(submit.full, "submit_11.csv", row.names = F)
 
 
 
