@@ -1,3 +1,4 @@
+# set up file and load saved data
 setwd("/home/rstudio/Dropbox/Kaggle_Facebook")
 
 # bids <- read.csv("bids.csv")
@@ -25,7 +26,51 @@ install.packages("ROCR")
 library(ROCR)
 install.packages("Hmisc")
 library(Hmisc)
+install.packages("mlbench")
+library(mlbench)
+install.packages("party")
+library(party)
+install.packages("doParallel")
+library(doParallel)
 
+
+# extract basically volume features
+# save(bidder.train, file="bidder_train.RData", ascii=T, compress=T)
+load("bidder_train.RData")
+# save(bidder.train.ext, file="bidder_train_ext.RData", ascii=T, compress=T)
+load("bidder_train_ext.RData")
+# save(bidder.test, file="bidder.test.RData", ascii=T, compress=T)
+load("bidder.test.RData")
+# save(bidder.test.ext, file="bidder_test_ext.RData", ascii=T, compress=T)
+load("bidder_test_ext.RData")
+
+# extracted per auction feature
+# save(bidder.train.ext.3, file = 'bidder_train_ext_3.RData', ascii = T, compress = T)
+# save(bidder.test.ext.3, file = 'bidder_test_ext_3.RData', ascii = T, compress = T)
+load('bidder_train_ext_3.RData')
+load('bidder_test_ext_3.RData')
+
+# extracted time differences for per auction (16 features)
+# save(bidder.train.ext.4, file = "bidder.train.ext.4.RData", ascii = T, compress = T)
+# save(bidder.test.ext.4, file = "bidder.test.ext.4.RData", ascii = T, compress = T)
+load("bidder.train.ext.4.RData")
+load("bidder.test.ext.4.RData")
+
+# save(bidder.train.ext.5, file = 'bidder.train.ext.5.RData')
+# save(bidder.test.ext.5, file = 'bidder.test.ext.5.RData')
+load('bidder.train.ext.5.RData')
+load('bidder.test.ext.5.RData')
+
+# save file so running rf and gbm model to get varImp is not needed every time
+# save(merged.import, file = "merged.import.RData")
+load("merged.import.RData")
+# most important features according to caret RF only
+load('rf.import.RData')
+
+# save(bidder.train.ext.6, file = 'bidder.train.ext.6.Rdata')
+# save(bidder.test.ext.6, file = 'bidder.test.ext.6.RData')
+load('bidder.train.ext.6.Rdata')
+load('bidder.test.ext.6.RData')
 
 # extract bidder information; transform training data to be bidder per row
 # features to be extracted: 
@@ -349,104 +394,8 @@ load('bidder_test_ext_3.RData')
 # extract time differences between bids in any given auction
 # extract the min, max, mean, and sd of time differences across all auctions
 bidder.time <- data.frame()
+count.time <- nrow(bidder.train.ext.3)
 GetTimeDiff <- function(bidder.id) {
-# the function is used in conjuction with tapply through either bids.full or bids.w.test
-# it iterates through each bidder_id, finds all associated auctions for that bidder,
-# first finds min, mean, max, and sd of all time differences between each bid in a given auction,
-# second it calculates the min, mean, max, and sd of the above values for any given auction, across
-# all auctions.
-# Eventually the function will update the bidder.time data.frame to include 16 time related features.
-#
-# Args:
-#   bidder.id: the bidder_id factor; to be used as a key to iterate through in tapply
-#
-# returns: nothing;
-# but through each iteration, bidder.time is updated;
-# bidder.time will have the following features:
-# mean.min.diff.auc, max.min.diff.auc, min.min.diff.auc, sd.min.diff.auc,
-# mean.mean.diff.auc, max.mean.diff.auc, min.mean.diff.auc, sd.mean.diff.auc,
-# mean.max.diff.auc, max.max.diff.auc, min.max.diff.auc, sd.max.diff.auc,
-# mean.sd.diff.auc, max.sd.diff.auc, min.sd.diff.auc, sd.sd.diff.auc
-bidder.subset <- subset(bids.full, bidder_id == bidder.id)
-bidder.subset.aucs <- data.frame()
-lapply(split(bidder.subset, as.factor(as.character(bidder.subset$auction))), function(auc.subset) {
-  # the lapply iterates through each of the auction subset,
-  # and extracts min, mean, max, and sd of bid time difference for each auction
-  times <- sort(auc.subset$time)
-  new.times <- times[2:length(times)]
-  # handle only 1 bid in the auction
-  if (length(times) > 1) {
-    diff <- new.times - times[1:(length(times) - 1)]
-    row <- c(min(diff), mean(diff), max(diff), sd(diff))
-  } else {
-  # if only one bid is found for an auction, fill in temp values first
-    row <- c(NA, NA, NA, 0)
-  }
-  row <- data.frame(t(data.frame(row)))
-  row[5] <- as.character(auc.subset$auction[1])
-  row[6] <- as.character(bidder.id)
-  names(row) <- c("min.diff.auc", "mean.diff.auc", "max.diff.auc", "sd.diff.auc", "auction", "bidder_id")
-  bidder.subset.aucs <<- rbind(bidder.subset.aucs, row)
-  
-  })
-  # if only one bid is found, fill in the min, mean, max with mean of time difference across all auctions
-  # if sd.diff.auc is mean for an auction, fill in 0
-  mean.all <- mean(bidder.subset.aucs[!is.na(bidder.subset.aucs$mean.diff.auc), 'mean.diff.auc'])
-  bidder.subset.aucs[is.na(bidder.subset.aucs[,1]), 1] <- mean.all
-  bidder.subset.aucs[is.na(bidder.subset.aucs[,2]), 2] <- mean.all
-  bidder.subset.aucs[is.na(bidder.subset.aucs[,3]), 3] <- mean.all
-  bidder.subset.aucs[is.na(bidder.subset.aucs[,4]), 4] <- 0
-  # now extract the second layer of information: the distribution of the summary metrics
-  GetMinMaxMeanSd <- function(df) {
-  # a function to extract min, max, mean, and sd from each column of a data.frame
-  #  Args:
-  #   df: a data.frame
-  #   return a one-row data.frame with min, max, mean, and sd for each original column feature
-    auc.df <- data.frame(bidder_id = bidder.id)
-    for (i in 1:(ncol(df)-1)) {
-      min <- min(as.numeric(df[,i]))
-      max <- max(as.numeric(df[,i]))
-      mean <- mean(as.numeric(df[,i]))
-      sd <- sd(as.numeric(df[,i]))
-      row <- c(min, max, mean, sd)
-      row <- data.frame(t(data.frame(row)))
-      feature <- names(df)[i]
-      name.min <- paste0("min", ".", feature)
-      name.mean <- paste0("mean", ".", feature)
-      name.max <- paste0("max", ".", feature)
-      name.sd <- paste0("sd", ".", feature)
-      names(row) <- c(name.min, name.mean, name.max, name.sd)
-      auc.df <- cbind(auc.df, row)
-  }
-    return(auc.df)
-  }
-  df <- GetMinMaxMeanSd(bidder.subset.aucs[,1:4])
-  print(count.time)
-  count.time <<- count.time - 1
-  print(df)
-  bidder.time <<- rbind(bidder.time, df)
-  }
-
-tapply(bidder.train.ext.3$bidder_id, bidder.train.ext.3$bidder_id, GetTimeDiff)
-rownames(bidder.time) <- NULL
-
-# for values of NaN, fill in the entire column's median (except if it's sd, which will fill in 0 instead)
-bidder.time.1 <- bidder.time[,2:ncol(bidder.time)]
-for (i in 1:ncol(bidder.time.1)) {
-  sd.names <- grepl("sd", names(bidder.time.1))
-  if (!sd.names[i]) {
-    bidder.time.1[is.nan(bidder.time.1[, i]), i] <- median(bidder.time.1[!is.nan(bidder.time.1[, i]), i])
-  } else {
-    bidder.time.1[is.na(bidder.time.1[, i]), i] <- 0
-  }
-}
-bidder.time.1$bidder_id <- bidder.time$bidder_id
-
-
-# apply the same extraction process to the testing data set
-bidder.time.test <- data.frame()
-count.time.test <- nrow(bidder.test)
-GetTimeDiffTest <- function(bidder.id) {
   # the function is used in conjuction with tapply through either bids.full or bids.w.test
   # it iterates through each bidder_id, finds all associated auctions for that bidder,
   # first finds min, mean, max, and sd of all time differences between each bid in a given auction,
@@ -464,21 +413,128 @@ GetTimeDiffTest <- function(bidder.id) {
   # mean.mean.diff.auc, max.mean.diff.auc, min.mean.diff.auc, sd.mean.diff.auc,
   # mean.max.diff.auc, max.max.diff.auc, min.max.diff.auc, sd.max.diff.auc,
   # mean.sd.diff.auc, max.sd.diff.auc, min.sd.diff.auc, sd.sd.diff.auc
-  bidder.subset <- subset(bids.w.test, bidder_id == bidder.id)
+  bidder.subset <- subset(bids.full, bidder_id == bidder.id)
+  bidder.subset <- bidder.subset[order(bidder.subset$time), ]
   bidder.subset.aucs <- data.frame()
   lapply(split(bidder.subset, as.factor(as.character(bidder.subset$auction))), function(auc.subset) {
-  # the lapply iterates through each of the auction subset,
-  # and extracts min, mean, max, and sd of bid time difference for each auction
-    times <- sort(auc.subset$time)
-    new.times <- times[2:length(times)]
-    # handle only 1 bid in the auction
-    if (length(times) > 1) {
+      # the lapply iterates through each of the auction subset,
+      # and extracts min, mean, max, and sd of bid time difference for each auction
+      times <- sort(auc.subset$time)
+      if (length(times) > 1) {
+        new.times <- times[2:length(times)]
+      } else {
+        # if only one bid is found for an auction, get time from the first bid of next auction
+        # if only one bid is found for an user, or there is no subsequent bids, 
+        #  get next bid time from the max value of the dataset
+        new.times <- bidder.subset[grep(auc.subset$auction[1], bidder.subset$auction) + 1, 'time'] 
+        if (is.na(new.times)) {
+          new.times <- max(bids.full$time)
+        }
+      
+      }
       diff <- new.times - times[1:(length(times) - 1)]
-      row <- c(min(diff), mean(diff), max(diff), sd(diff))
+      sd <- ifelse(is.na(sd(diff)), 0, sd(diff) )
+      row <- c(min(diff), mean(diff), max(diff), sd)
+      
+      
+      # handle only 1 bid in the auction
+     
+      row <- data.frame(t(data.frame(row)))
+      row[5] <- as.character(auc.subset$auction[1])
+      row[6] <- as.character(bidder.id)
+      names(row) <- c("min.diff.auc", "mean.diff.auc", "max.diff.auc", "sd.diff.auc", "auction", "bidder_id")
+      bidder.subset.aucs <<- rbind(bidder.subset.aucs, row)
+      
+      })
+    #   # if only one bid is found, fill in the min, mean, max with mean of time difference across all auctions
+    #   # if sd.diff.auc is mean for an auction, fill in 0
+    #   mean.all <- mean(bidder.subset.aucs[!is.na(bidder.subset.aucs$mean.diff.auc), 'mean.diff.auc'])
+    #   bidder.subset.aucs[is.na(bidder.subset.aucs[,1]), 1] <- mean.all
+    #   bidder.subset.aucs[is.na(bidder.subset.aucs[,2]), 2] <- mean.all
+    #   bidder.subset.aucs[is.na(bidder.subset.aucs[,3]), 3] <- mean.all
+    #   bidder.subset.aucs[is.na(bidder.subset.aucs[,4]), 4] <- 0
+      # now extract the second layer of information: the distribution of the summary metrics
+      GetMinMaxMeanSd <- function(df) {
+      # a function to extract min, max, mean, and sd from each column of a data.frame
+      #  Args:
+      #   df: a data.frame
+      #   return a one-row data.frame with min, max, mean, and sd for each original column feature
+        auc.df <- data.frame(bidder_id = bidder.id)
+        for (i in 1:(ncol(df)-1)) {
+          min <- min(as.numeric(df[,i]))
+          max <- max(as.numeric(df[,i]))
+          mean <- mean(as.numeric(df[,i]))
+          sd <- sd(as.numeric(df[,i]))
+          sd <- ifelse(is.na(sd), 0, sd)
+          row <- c(min, max, mean, sd)
+          row <- data.frame(t(data.frame(row)))
+          feature <- names(df)[i]
+          name.min <- paste0("min", ".", feature)
+          name.mean <- paste0("mean", ".", feature)
+          name.max <- paste0("max", ".", feature)
+          name.sd <- paste0("sd", ".", feature)
+          names(row) <- c(name.min, name.mean, name.max, name.sd)
+          auc.df <- cbind(auc.df, row)
+      }
+        return(auc.df)
+      }
+      df <- GetMinMaxMeanSd(bidder.subset.aucs[,1:4])
+      print(count.time)
+      count.time <<- count.time - 1
+      print(df)
+      bidder.time <<- rbind(bidder.time, df)
+}
+
+tapply(bidder.train.ext.3$bidder_id, bidder.train.ext.3$bidder_id, GetTimeDiff)
+rownames(bidder.time) <- NULL
+
+# apply the same extraction process to the testing data set
+bidder.time.test <- data.frame()
+count.time.test <- nrow(bidder.test)
+GetTimeDiffTest <- function(bidder.id) {
+  # the function is used in conjuction with tapply through either bids.full or bids.w.test
+  # it iterates through each bidder_id, finds all associated auctions for that bidder,
+  # first finds min, mean, max, and sd of all time differences between each bid in a given auction,
+  # second it calculates the min, mean, max, and sd of the above values for any given auction, across
+  # all auctions.
+  # Eventually the function will update the bidder.time data.frame to include 16 time related features.
+  #
+  # Args:
+  #   bidder.id: the bidder_id factor; to be used as a key to iterate through in tapply
+  #
+  # returns: nothing;
+  # but through each iteration, bidder.time is updated;
+  # bidder.`time will have the following features:
+  # mean.min.diff.auc, max.min.diff.auc, min.min.diff.auc, sd.min.diff.auc,
+  # mean.mean.diff.auc, max.mean.diff.auc, min.mean.diff.auc, sd.mean.diff.auc,
+  # mean.max.diff.auc, max.max.diff.auc, min.max.diff.auc, sd.max.diff.auc,
+  # mean.sd.diff.auc, max.sd.diff.auc, min.sd.diff.auc, sd.sd.diff.auc
+  bidder.subset <- subset(bids.w.test, bidder_id == bidder.id)
+  bidder.subset <- bidder.subset[order(bidder.subset$time), ]
+  bidder.subset.aucs <- data.frame()
+  lapply(split(bidder.subset, as.factor(as.character(bidder.subset$auction))), function(auc.subset) {
+    # the lapply iterates through each of the auction subset,
+    # and extracts min, mean, max, and sd of bid time difference for each auction
+    times <- sort(auc.subset$time)
+    if (length(times) > 1) {
+      new.times <- times[2:length(times)]
     } else {
-    # if only one bid is found for an auction, fill in temp values first
-      row <- c(NA, NA, NA, 0)
+      # if only one bid is found for an auction, get time from the first bid of next auction
+      # if only one bid is found for an user, or there is no subsequent bids, 
+      #  get next bid time from the max value of the dataset
+      new.times <- bidder.subset[grep(auc.subset$auction[1], bidder.subset$auction) + 1, 'time'] 
+      if (is.na(new.times)) {
+        new.times <- max(bids.full$time)
+      }
+      
     }
+    diff <- new.times - times[1:(length(times) - 1)]
+    sd <- ifelse(is.na(sd(diff)), 0, sd(diff) )
+    row <- c(min(diff), mean(diff), max(diff), sd)
+    
+    
+    # handle only 1 bid in the auction
+    
     row <- data.frame(t(data.frame(row)))
     row[5] <- as.character(auc.subset$auction[1])
     row[6] <- as.character(bidder.id)
@@ -487,11 +543,11 @@ GetTimeDiffTest <- function(bidder.id) {
   })
   # if only one bid is found, fill in the min, mean, max with mean of time difference across all auctions
   # if sd.diff.auc is mean for an auction, fill in 0
-  mean.all <- mean(bidder.subset.aucs[!is.na(bidder.subset.aucs$mean.diff.auc), 'mean.diff.auc'])
-  bidder.subset.aucs[is.na(bidder.subset.aucs[,1]), 1] <- mean.all
-  bidder.subset.aucs[is.na(bidder.subset.aucs[,2]), 2] <- mean.all
-  bidder.subset.aucs[is.na(bidder.subset.aucs[,3]), 3] <- mean.all
-  bidder.subset.aucs[is.na(bidder.subset.aucs[,4]), 4] <- 0
+#   mean.all <- mean(bidder.subset.aucs[!is.na(bidder.subset.aucs$mean.diff.auc), 'mean.diff.auc'])
+#   bidder.subset.aucs[is.na(bidder.subset.aucs[,1]), 1] <- mean.all
+#   bidder.subset.aucs[is.na(bidder.subset.aucs[,2]), 2] <- mean.all
+#   bidder.subset.aucs[is.na(bidder.subset.aucs[,3]), 3] <- mean.all
+#   bidder.subset.aucs[is.na(bidder.subset.aucs[,4]), 4] <- 0
   # now extract the second layer of information: the distribution of the summary metrics
   GetMinMaxMeanSd <- function(df) {
   # a function to extract min, max, mean, and sd from each column of a data.frame
@@ -522,68 +578,40 @@ GetTimeDiffTest <- function(bidder.id) {
   print(df)
   bidder.time.test <<- rbind(bidder.time.test, df)
 }
+
 tapply(bidder.test.ext.3$bidder_id, bidder.test.ext.3$bidder_id, GetTimeDiffTest)
 rownames(bidder.time.test) <- NULL
 
-# for values of NaN, fill in the entire column's median (except if it's sd, which will fill in 0 instead)
-bidder.time.test.1 <- bidder.time.test[,2:ncol(bidder.time.test)]
-for (i in 1:ncol(bidder.time.test.1)) {
-    sd.names <- grepl("sd", names(bidder.time.test.1))
-  if (!sd.names[i]) {
-    bidder.time.test.1[is.nan(bidder.time.test.1[, i]), i] <- median(bidder.time.test.1[!is.nan(bidder.time.test.1[, i]), i])
-  } else {
-    bidder.time.test.1[is.na(bidder.time.test.1[, i]), i] <- 0
-  }
-}
-bidder.time.test.1$bidder_id <- bidder.time.test$bidder_id
 
 # merge bidder.time.1 and bidder.time.test.1 to 
-bidder.train.ext.4 <- merge(bidder.train.ext.3, bidder.time.1)
-bidder.test.ext.4 <- merge(bidder.test.ext.3, bidder.time.test.1)
+bidder.train.ext.4 <- merge(bidder.train.ext.3, bidder.time)
+bidder.test.ext.4 <- merge(bidder.test.ext.3, bidder.time.test)
 
+bidder.test.ext.4[is.na(bidder.test.ext.4$sd.min.diff.auc), 'sd.min.diff.auc'] <- 0
+bidder.test.ext.4[is.na(bidder.test.ext.4$sd.mean.diff.auc), 'sd.mean.diff.auc'] <- 0
+bidder.test.ext.4[is.na(bidder.test.ext.4$sd.max.diff.auc), 'sd.max.diff.auc'] <- 0
+
+
+
+
+
+
+# remove redundant features
+bidder.train.ext.4 <- bidder.train.ext.4[, !names(bidder.train.ext.4) %in% 
+                                           c('payment_account', 'address', 'bids.min',
+                                             'devices.min', 'countries.min', 'ips.min',
+                                             'urls.min')]
+bidder.test.ext.4 <- bidder.test.ext.4[, !names(bidder.test.ext.4) %in% 
+                                           c('payment_account', 'address', 'bids.min',
+                                             'devices.min', 'countries.min', 'ips.min',
+                                             'urls.min')]
 # save(bidder.train.ext.4, file = "bidder.train.ext.4.RData", ascii = T, compress = T)
 # save(bidder.test.ext.4, file = "bidder.test.ext.4.RData", ascii = T, compress = T)
 load("bidder.train.ext.4.RData")
 load("bidder.test.ext.4.RData")
 
 
-# fitting models
 
-# fit a RF model with all observations from the bidder.train dataset, use caret to examine CV 
-# and tuning parameters
-# rfGrid <-  expand.grid(mtry = c(1:8))
-# rf.model <- train(as.factor(outcome) ~ . - bidder_id - auction, bidder.train, method = 'rf', metric = 'Spec',
-#                        trControl = trainControl(method = 'repeatedcv', 
-#                                                 number = 10,
-#                                                 repeats = 10,
-#                                                 classProbs = T,
-#                                                 summaryFunction = twoClassSummary),
-#                        tuneGrid = rfGrid)
-
-# 
-rfGrid <-  expand.grid(mtry = c(2:40))
-rf.model.full <- train(as.factor(outcome) ~ . - bidder_id - payment_account - address, 
-                       bidder.train.ext.4, method = 'rf', metric = 'ROC',
-                       tuneGrid = rfGrid,
-                       trControl = trainControl(method = 'cv', 
-                                                number = 10,
-                                                classProbs = T,
-                                                summaryFunction = twoClassSummary))
-
-
-gbmGrid <- expand.grid(interaction.depth = c(1, 5, 9),
-                                   n.trees = (1:30)*50,
-                                   shrinkage = 0.1,
-                                   n.minobsinnode = 10)
-
-gbm.model.full <- train(as.factor(outcome) ~ . - bidder_id - payment_account - address, 
-                        bidder.train.ext.4, method = 'gbm', metric = 'ROC',
-                        verbose=T, 
-                        tuneGrid = gbmGrid,
-                        trControl = trainControl(method = 'cv', 
-                                                 number = 10,
-                                                 classProbs = T,
-                                                 summaryFunction = twoClassSummary))
 
 # select only the most important features from both models
 rf.import <- varImp(rf.model.full)$importance
@@ -609,246 +637,129 @@ merged.import <- merged.import[order(-merged.import$rf.overall), ]
 # save(merged.import, file = "merged.import.RData")
 load("merged.import.RData")
 
-# fit the models again, with only selected features
-rfGrid <-  expand.grid(mtry = c(2:20))
-rf.model.full.2 <- train(x = bidder.train.ext.4[, names(bidder.train.ext.4) %in% merged.import$feature], 
-                         y =  as.factor(bidder.train.ext.4$outcome),
-                         method = 'rf', metric = 'ROC',
-                         tuneGrid = rfGrid,
-                         trControl = trainControl(method = 'cv', 
-                                                number = 10,
-                                                classProbs = T,
-                                                summaryFunction = twoClassSummary))
+# extract country feature
+country.code <- read.csv("country_code.csv")
 
-# select only the top 20 features from the RF model
-# rfGrid <-  expand.grid(mtry = c(2:20))
-# features <- rownames(varImp(rf.model.full)$importance)[1:20]
-# rf.model.full.3 <- train(x = bidder.train.ext.4[, names(bidder.train.ext.4) %in% features], 
-#                          y =  as.factor(bidder.train.ext.4$outcome),
-#                          method = 'rf', metric = 'ROC',
-#                          tuneGrid = rfGrid,
-#                          trControl = trainControl(method = 'cv',
-#                                                   classProbs = T,
-#                                                   summaryFunction = twoClassSummary))
-
-
-gbmGrid <- expand.grid(interaction.depth = c(1, 5, 9),
-                       n.trees = (1:30)*50,
-                       shrinkage = 0.1,
-                       n.minobsinnode = 10)
-
-gbm.model.full.2 <- train(x = bidder.train.ext.4[, names(bidder.train.ext.4) %in% merged.import$feature], 
-                          y =  as.factor(bidder.train.ext.4$outcome),
-                        method = 'gbm', metric = 'ROC',
-                        verbose=T,
-                        tuneGrid = gbmGrid,
-                        trControl = trainControl(method = 'cv', 
-                                                 number = 10,
-                                                 classProbs = T,
-                                                 summaryFunction = twoClassSummary))
-
-# 
-# 
-# 
-# 
-# 
-# 
-# # throw out some human observations if they are outliers
-# # keep only human observations with bids.mean within 3 quantiles
-# bidder.train.human <- subset(bidder.train.ext.4, outcome == "X0")
-# quantile <- cut2(bidder.train.human$bids.mean, g = 4)
-# bidder.train.human$cut <- quantile
-# bidder.train.human.1 <- subset(bidder.train.human, cut %in% levels(quantile)[2:3])
-# bidder.train.bot <- subset(bidder.train.ext.4, outcome == "X1")
-# bidder.train.ext.5 <- rbind(bidder.train.human.1[, !names(bidder.train.human.1) %in% 'cut'], 
-#                             bidder.train.bot)
-# 
-# 
-# # fit a rf model for the new training set
-# rfGrid <-  expand.grid(mtry = c(2:20))
-# rf.model.full.2 <- train(x = bidder.train.ext.5[, names(bidder.train.ext.5) %in% merged.import$feature], 
-#                          y =  as.factor(bidder.train.ext.5$outcome),
-#                          method = 'rf', metric = 'ROC',
-#                          tuneGrid = rfGrid,
-#                          trControl = trainControl(method = 'repeatedcv', 
-#                                                   number = 10,
-#                                                   repeats = 10,
-#                                                   classProbs = T,
-#                                                   summaryFunction = twoClassSummary))
-# 
-# gbmGrid <- expand.grid(interaction.depth = c(1, 5, 9),
-#                        n.trees = (1:30)*50,
-#                        shrinkage = 0.1,
-#                        n.minobsinnode = 10)
-# gbm.model.full.3 <- train(x = bidder.train.ext.5[, names(bidder.train.ext.5) %in% merged.import$feature], 
-#                           y =  as.factor(bidder.train.ext.5$outcome),
-#                           method = 'gbm', metric = 'ROC',
-#                           verbose=T,
-#                           tuneGrid = gbmGrid,
-#                           trControl = trainControl(method = 'repeatedcv', 
-#                                                    number = 10,
-#                                                    repeats = 10,
-#                                                    classProbs = T,
-#                                                    summaryFunction = twoClassSummary))
-
-# create 10-cross validation with the final models
-CrossValidation <- function(model, df) {
-  # this function inputs a model, checks AUC with a repeated 10-fold validation
-  # and returns the AUC value for all repeated 10 folds
-  #
-  # Args:
-  #   model: the model to be evaluated
-  #     
-  # returns: 
-  #   a list with AUC value for each fold 
-  features <- c(model$finalModel$xNames, "outcome")
-  folds <- createFolds(y = df$outcome, k = 10, list = T, returnTrain = F)
+bidder.country <- data.frame()
+count.country <- nrow(bids.full)
+lapply(split(bids.full, as.factor(as.character(bids.full$bidder_id))), function(x) {
+  country.bids.bidder.part <- data.frame(country = country.code$code)
+  df <- aggregate(bidder_id ~ country, x, length)
+  sum <- sum(df$bidder_id)
+  country.bids.bidder.part <- merge(country.bids.bidder.part, df, all = T)
+  country.bids.bidder.part[is.na(country.bids.bidder.part$bidder_id), 2] <- 0
+  country.bids.bidder.part$bidder_id <- round(country.bids.bidder.part$bidder_id * 100 / sum, 2)
+  country.bids.bidder.part.t <- t(country.bids.bidder.part [, 2])
+  colnames(country.bids.bidder.part.t) <- as.character(t(country.bids.bidder.part[, 1]))
+  country.bids.bidder.part.t <- data.frame(country.bids.bidder.part.t)
+  rownames(country.bids.bidder.part.t) <- NULL
   
-  # get model method
-  method <- model$method
+  country.bids.bidder.part.t$bidder_id <- as.character(x$bidder_id[1])
+  bidder.country <<- rbind(bidder.country, country.bids.bidder.part.t)
+  count.country <<- count.country - 1
+  print(count.country)
   
-  # get model tuneValues
-  tune.values <- model$finalModel$tuneValue
-  rownames(tune.values) <- NULL
-  tuneGrid <- expand.grid(tune.values)
+})
+
+bidder.train.ext.5 <- merge(bidder.train.ext.4, bidder.country)
+
+
+# extract country feature for test set
+bidder.country.test <- data.frame()
+count.country.test <- nrow(bidder.test.ext.4)
+lapply(split(bids.w.test, as.factor(as.character(bids.w.test$bidder_id))), function(x) {
+  country.bids.bidder.part <- data.frame(country = country.code$code)
+  df <- aggregate(bidder_id ~ country, x, length)
+  sum <- sum(df$bidder_id)
+  country.bids.bidder.part <- merge(country.bids.bidder.part, df, all = T)
+  country.bids.bidder.part[is.na(country.bids.bidder.part$bidder_id), 2] <- 0
+  country.bids.bidder.part$bidder_id <- round(country.bids.bidder.part$bidder_id * 100 / sum, 2)
+  country.bids.bidder.part.t <- t(country.bids.bidder.part [, 2])
+  colnames(country.bids.bidder.part.t) <- as.character(t(country.bids.bidder.part[, 1]))
+  country.bids.bidder.part.t <- data.frame(country.bids.bidder.part.t)
+  rownames(country.bids.bidder.part.t) <- NULL
   
-  # trControl with no validation method
-  trControl = trainControl(method = 'none',
-                           classProbs = T,
-                           summaryFunction = twoClassSummary)
+  country.bids.bidder.part.t$bidder_id <- as.character(x$bidder_id[1])
+  bidder.country.test <<- rbind(bidder.country.test, country.bids.bidder.part.t)
+  count.country.test <<- count.country.test - 1
+  print(count.country.test)
   
-   
-  auc <- c()
-  # repeated the 10-fold cross validation 10 times
-  for (j in 1:10) {
-    
-    for (i in 1:length(folds)) {
-      
-      inTest <- folds[[i]]
-      intest.fold <- df[inTest, ]
-      intrain.fold <- df[-inTest, ]
-      # replace X0 and X1 with 0 and 1
-      #   bidder.train[bidder.train$outcome == 1, "outcome"] <- "X1"
-      #   bidder.train[bidder.train$outcome == 0, "outcome"] <- "X0"
-      #   
-      intest.fold[intest.fold$outcome == "X0", "outcome"] <- 0
-      intest.fold[intest.fold$outcome == "X1", "outcome"] <- 1
-      
-      intest.fold$outcome <- as.numeric(intest.fold$outcome)
-      
-      # subset intest.fold to only include related features
-      intest.fold <- intest.fold[, names(intest.fold) %in% features]
-      
-      intrain <- intrain.fold[, names(intrain.fold) %in% features]
-      y <- as.factor(intrain$outcome)
-      
-      intrain.model <- train(x = intrain[, names(intrain) != 'outcome'],
-                             y = y,
-                             method = method,
-                             tuneGrid = tuneGrid,
-                             trControl = trControl)
-      
-      pred.fold <- predict(intrain.model, intest.fold, type = "prob")
-      roc.fold <- prediction(pred.fold$X1, intest.fold$outcome)
-      auc.fold <- performance(roc.fold, measure = 'auc')@y.values[[1]]
-      print(auc.fold)      
-      auc <- c(auc, auc.fold)      
-      
-    }
-  } 
-  
-  return(auc) 
+})
+
+bidder.test.ext.5 <- merge(bidder.test.ext.4, bidder.country.test)
+
+# save(bidder.train.ext.5, file = 'bidder.train.ext.5.RData')
+# save(bidder.test.ext.5, file = 'bidder.test.ext.5.RData')
+load('bidder.train.ext.5.RData')
+load('bidder.test.ext.5.RData')
+
+# add quantile features
+# for training set
+bidder.train.ext.6 <- data.frame(bidder_id = bidder.train.ext.4$bidder_id, 
+                                 outcome = bidder.train.ext.4$outcome)
+feats.to.quant <- names(bidder.train.ext.4[, !names(bidder.train.ext.4) 
+                                           %in% c('bidder_id', 'outcome', 'merchandise')])
+for (i in 1:length(feats.to.quant)) {
+  quant.name <- paste0(feats.to.quant[i], ".quant")
+  quant <- (bidder.train.ext.4[, feats.to.quant[i]] - 
+              mean(bidder.train.ext.4[, feats.to.quant[i]])) / sd(bidder.train.ext.4[, feats.to.quant[i]])
+  quant <- pnorm(quant)
+  bidder.train.ext.6[, quant.name] <- quant          
+            
+}
+
+# for testing set
+bidder.test.ext.6 <- data.frame(bidder_id = bidder.test.ext.4$bidder_id, 
+                                 outcome = bidder.test.ext.4$outcome)
+feats.to.quant <- names(bidder.test.ext.4[, !names(bidder.test.ext.4) 
+                                           %in% c('bidder_id', 'outcome', 'merchandise')])
+for (i in 1:length(feats.to.quant)) {
+  quant.name <- paste0(feats.to.quant[i], ".quant")
+  quant <- (bidder.test.ext.4[, feats.to.quant[i]] - 
+              mean(bidder.test.ext.4[, feats.to.quant[i]])) / sd(bidder.test.ext.4[, feats.to.quant[i]])
+  quant <- pnorm(quant)
+  bidder.test.ext.6[, quant.name] <- quant          
   
 }
 
-CrossValidationSmallTree <- function(model) {
-  # this function inputs a model, checks AUC with a repeated 10-fold validation
-  # and returns the AUC value for all repeated 10 folds
-  #
-  # Args:
-  #   model: the model to be evaluated
-  #     
-  # returns: 
-  #   a list with AUC value for each fold 
-#   features <- merged.import$feature
-  
-  # include top 20 features important to rf.model.full only
-  features <- rownames(varImp(rf.model.full)$importance)[1:20]
-  features <- c(features, "outcome")
-  folds <- createFolds(y = bidder.train.ext.4$outcome, k = 10, list = T, returnTrain = F)
-  
-  # get model method
-  method <- model$method
-  
-  # get model tuneValues
-  tune.values <- model$finalModel$tuneValue
-  rownames(tune.values) <- NULL
-  tuneGrid <- expand.grid(tune.values)
-  
-  # trControl with no validation method
-  trControl = trainControl(method = 'none',
-                           classProbs = T,
-                           summaryFunction = twoClassSummary)
-  
-  
-  auc <- c()
-  # repeated the 10-fold cross validation 10 times
-  for (j in 1:10) {
-    
-    for (i in 1:length(folds)) {
-      
-      inTest <- folds[[i]]
-      intest.fold <- bidder.train.ext.4[inTest, ]
-      intrain.fold <- bidder.train.ext.4[-inTest, ]
-      # replace X0 and X1 with 0 and 1
-      #   bidder.train[bidder.train$outcome == 1, "outcome"] <- "X1"
-      #   bidder.train[bidder.train$outcome == 0, "outcome"] <- "X0"
-      #   
-      intest.fold[intest.fold$outcome == "X0", "outcome"] <- 0
-      intest.fold[intest.fold$outcome == "X1", "outcome"] <- 1
-      
-      intest.fold$outcome <- as.numeric(intest.fold$outcome)
-      
-      # subset intest.fold to only include related features
-      intest.fold <- intest.fold[, names(intest.fold) %in% features]
-      
-      intrain <- intrain.fold[, names(intrain.fold) %in% features]
-      y <- as.factor(intrain$outcome)
-      
-      intrain.model <- train(x = intrain[, names(intrain) != 'outcome'],
-                             y = y,
-                             method = method,
-                             tuneGrid = tuneGrid,
-                             trControl = trControl)
-      
-      pred.fold <- predict(intrain.model, intest.fold, type = "prob")
-      roc.fold <- prediction(pred.fold$X1, intest.fold$outcome)
-      auc.fold <- performance(roc.fold, measure = 'auc')@y.values[[1]]
-      plot(performance(roc.fold, 'tpr', 'fpr'))
-      print(auc.fold)      
-      auc <- c(auc, auc.fold)      
-      
-    }
-  } 
-  
-  return(auc) 
-  
-}
-
-auc.rf.model.1 <- CrossValidation(rf.model.full)
-auc.rf.model.3 <- CrossValidationSmallTree(rf.model.full.3)
-# modified features in CrossValidationSmallTree function, change it back
-auc.rf.model.4 <- CrossValidationSmallTree(rf.model.full.3)
-# use throw-out set
-auc.rf.model.2 <- CrossValidationSmallTree(rf.model.full.2)
-auc.gbm.model.3 <- CrossValidationSmallTree(gbm.model.full.3)
+# are they useful? fit a RF to find out
+rf.quant <- train(as.factor(outcome) ~ . - bidder_id, bidder.train.ext.6,
+                                 method = 'rf', metric = 'ROC',
+                                 trControl = trainControl(method = 'cv', 
+                                                          number = 10,
+                                                          classProbs = T,
+                                                          summaryFunction = twoClassSummary))
 
 
+rf.original <- train(as.factor(outcome) ~ . - bidder_id - merchandise, bidder.train.ext.4,
+                  method = 'rf', metric = 'ROC',
+                  trControl = trainControl(method = 'cv', 
+                                           number = 10,
+                                           classProbs = T,
+                                           summaryFunction = twoClassSummary))
+
+# rf.quant has sligtly better CV scores; keep it
+
+# bidder.country info for train and test
+bidder.country <- bidder.train.ext.5[, 37:290]
+bidder.country.test <- bidder.test.ext.5[, 37:290]
+
+bidder.train.ext.6 <- merge(bidder.train.ext.6, bidder.country)
+bidder.test.ext.6 <- merge(bidder.test.ext.6, bidder.country.test)
+bidder.train.ext.6$merchandise <- bidder.train.ext.4$merchandise
+bidder.test.ext.6$merchandise <- bidder.test.ext.4$merchandise
+
+save(bidder.train.ext.6, file = 'bidder.train.ext.6.Rdata')
+save(bidder.test.ext.6, file = 'bidder.test.ext.6.RData')
+load('bidder.train.ext.6.Rdata')
+load('bidder.test.ext.6.RData')
+
+bidder.train.ext.7 <- merge(bidder.train.ext.6, bidder.train.ext.5)
+bidder.test.ext.7 <- merge(bidder.test.ext.6, bidder.test.ext.5)
 
 
-
-auc.gbm.model.1 <- CrossValidation(gbm.model.full)
-auc.gbm.model.2 <- CrossValidationSmallTree(gbm.model.full.2)
+# save(bidder.train.ext.7, file = 'bidder.train.ext.7.Rdata')
+# save(bidder.test.ext.7, file = 'bidder.test.ext.7.RData')
 
 
 
